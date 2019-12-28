@@ -27,6 +27,8 @@ class Router(object):
         # self.send_packet_with_original_destination(packet)
         packet.ipv4.src_addr = self.asset_addr
         packet.ipv4.dst_addr = '10.0.0.2'
+        packet.direction = 0  # outbounding
+        self.w.send(packet)
         print 'Redirecting a packet from the Honeypot to the Hacker at %s' % (packet.ipv4.dst_addr)
 
     def handle_packet_from_outside(self, packet):
