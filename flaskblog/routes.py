@@ -7,16 +7,16 @@ from sqlalchemy.sql import text
 
 posts = [
     {
-        'author': 'Kfir Sharabi',
-        'title': 'My New Web Server!',
-        'content': 'This is my first Web Server! Welcome!',
-        'date_posted': 'december 11, 2019'
+        'author': 'HAHAHAHA',
+        'title': 'HAHAHAHA',
+        'content': 'HAHAHAHA',
+        'date_posted': 'HAHAHAHA'
     },
     {
-        'author': 'Kfir Sharabi',
-        'title': 'My New Web Server!',
-        'content': 'This is my first Web Server! Welcome!',
-        'date_posted': 'december 11, 2019'
+        'author': 'HAHAHAHAHA',
+        'title': 'HAHAHAHA',
+        'content': 'HAHAHAHA',
+        'date_posted': 'HAHAHAHA'
     }
 ]
 
