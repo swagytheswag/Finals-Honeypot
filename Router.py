@@ -2,6 +2,7 @@ import pydivert
 import scapy.all as scapy
 import re
 import urllib
+import logging
 
 
 class Router(object):
@@ -10,13 +11,29 @@ class Router(object):
         self.honeypot_addr = honeypot_addr
         self.blacklist = []
         self.w = pydivert.WinDivert("(tcp.SrcPort == 5000 or tcp.DstPort == 5000) and ip.SrcAddr != %s"%(self.asset_addr))
+
+        open('logger.log', 'w').close()
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)
+        self.formatter = logging.Formatter('%(asctime)s:%(levelname)s:%(name)s:%(message)s')
+
+        self.file_handler = logging.FileHandler('logger.log')
+        self.file_handler.setLevel(logging.INFO)
+        self.file_handler.setFormatter(self.formatter)
+
+        self.stream_handler = logging.StreamHandler()
+        self.stream_handler.setLevel(logging.DEBUG)
+        self.stream_handler.setFormatter(self.formatter)
+
+        self.logger.addHandler(self.file_handler)
+        self.logger.addHandler(self.stream_handler)
     
     def start_router(self):
-        print 'Starting The Router'
+        self.logger.info('Starting The Router')
         self.w.open()   # Packets will be captured from now on
 
     def stop_router(self):
-        print 'Stopping The Router'
+        self.logger.info('Stopping The Router')
         self.w.close()  # stop capturing packets
 
     def from_honeypot(self, packet):
@@ -29,7 +46,7 @@ class Router(object):
         packet.ipv4.dst_addr = '10.0.0.2'
         packet.direction = 0  # outbounding
         self.w.send(packet)
-        print 'Redirecting a packet from the Honeypot to the Hacker at %s' % (packet.ipv4.dst_addr)
+        self.logger.debug('Redirecting a packet from the Honeypot to the Hacker at %s' % (packet.ipv4.dst_addr))
 
     def handle_packet_from_outside(self, packet):
         if packet.ipv4.src_addr == self.asset_addr:
@@ -37,18 +54,18 @@ class Router(object):
         else:
             if packet.ipv4.src_addr in self.blacklist:
                 self.send_to_honeypot(packet)
-                print 'Redirecting a blacklisted packet to the Honeypot from %s'%(packet.ipv4.src_addr)
+                self.logger.debug('Redirecting a blacklisted packet to the Honeypot from %s'%(packet.ipv4.src_addr))
 
             # if the packet includes malicious data
             elif self.is_malicious(packet):
                 self.blacklist.append(packet.ipv4.src_addr)
                 self.send_to_honeypot(packet)
-                print 'Redirecting a malicious packet to the Honeypot from %s'%(packet.ipv4.src_addr)
+                self.logger.debug('Redirecting a malicious packet to the Honeypot from %s'%(packet.ipv4.src_addr))
 
             # if the packet is safe, let it go
             else:
                 self.w.send(packet)
-                print 'Let in a non-malicious, non-blacklisted packet from %s'%(packet.ipv4.src_addr)
+                self.logger.debug('Let in a non-malicious, non-blacklisted packet from %s'%(packet.ipv4.src_addr))
 
     def send_to_honeypot(self, packet):
         '''
@@ -107,38 +124,10 @@ class Router(object):
             credentials = (urllib.unquote(m.group('email')), urllib.unquote(m.group('password')))
             for cred in credentials:
                 if '"' in cred or "'" in cred:
+                    self.logger.warning('SQLInjection attempt caught from %s'%(packet.ipv4.src_addr))
                     return True
         return False
 
-    def send_packet_with_original_destination(self, packet):
-        srcaddr = self.asset_addr
-        i = packet.payload.find('origin')
-        dstaddr = packet.payload[i+6:]
-        srcport = packet.src_port
-        dstport = packet.dst_port
-        seqnum = packet.tcp.seq_num
-        acknum = packet.tcp.ack_num - len(self.asset_addr) - len('origin')
-        flg = ""
-        if packet.tcp.fin:
-            flg += "F"
-        if packet.tcp.syn:
-            flg += "S"
-        if packet.tcp.ack:
-            flg += "A"
-        if packet.tcp.psh:
-            flg += "P"
-        if packet.tcp.urg:
-            flg += "U"
-        if packet.tcp.rst:
-            flg += "R"
-
-        html = scapy.Raw(load=packet.payload[0:i].replace(self.honeypot_addr, self.asset_addr))
-        ip = scapy.IP(src=srcaddr, dst=dstaddr)
-        tcp = scapy.TCP(sport=srcport, dport=dstport, flags=flg, seq=seqnum, ack=acknum)
-        pkt = ip/tcp/html
-
-        print 'Redirecting a packet from the Honeypot to the Hacker at %s' % (dstaddr)
-        scapy.send(pkt)
 
 
 
