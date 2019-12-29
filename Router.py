@@ -7,6 +7,11 @@ import logging
 
 class Router(object):
     def __init__(self, asset_addr, honeypot_addr):
+        """
+        Creating a Router instance which handles incoming packets, defends against attacks and logs everything.
+        :param asset_addr:
+        :param honeypot_addr:
+        """
         self.asset_addr = asset_addr
         self.honeypot_addr = honeypot_addr
         self.blacklist = []
@@ -37,7 +42,7 @@ class Router(object):
         self.w.close()  # stop capturing packets
 
     def from_honeypot(self, packet):
-        return packet.ipv4.src_addr == self.honeypot_addr
+        return packet.ipv4.src_addr == self.honeypot_addr # checks if the packet from the honeypot
     
     def handle_packet_from_honeypot(self, packet):
         # rout the packet back to the original sender
@@ -49,6 +54,10 @@ class Router(object):
         self.logger.debug('Redirecting a packet from the Honeypot to the Hacker at %s' % (packet.ipv4.dst_addr))
 
     def handle_packet_from_outside(self, packet):
+        """
+        Handles packets from outside clients.
+        :param packet:
+        """
         if packet.ipv4.src_addr == self.asset_addr:
             self.w.send(packet)
         else:
@@ -68,37 +77,11 @@ class Router(object):
                 self.logger.debug('Let in a non-malicious, non-blacklisted packet from %s'%(packet.ipv4.src_addr))
 
     def send_to_honeypot(self, packet):
-        '''
-        # rout the packet to the honeypot
-        if packet.payload:
-            srcaddr = packet.ipv4.src_addr
-            dstaddr = self.honeypot_addr
-            srcport = packet.src_port
-            dstport = packet.dst_port
-            seqnum = packet.tcp.seq_num
-            acknum = packet.tcp.ack_num + (packet.payload.count(self.asset_addr)+1)*(len(self.asset_addr)-len(self.honeypot_addr))
-            flg = ""
-            if packet.tcp.fin:
-                flg += "F"
-            if packet.tcp.syn:
-                flg += "S"
-            if packet.tcp.ack:
-                flg += "A"
-            if packet.tcp.psh:
-                flg += "P"
-            if packet.tcp.urg:
-                flg += "U"
-            if packet.tcp.rst:
-                flg += "R"
-
-            html = scapy.Raw(load=packet.payload.replace(self.asset_addr, self.honeypot_addr))
-            ip = scapy.IP(src=srcaddr, dst=dstaddr)
-            tcp = scapy.TCP(sport=srcport, dport=dstport, flags=flg, seq=seqnum, ack=acknum)
-            pkt = ip / tcp / html
-            scapy.send(pkt)
-
-        else:
-        '''
+        """
+        Redirect the packet to the honeypot.
+        :param packet:
+        :return:
+        """
         packet.ipv4.src_addr = self.asset_addr
         packet.ipv4.dst_addr = self.honeypot_addr
         #packet.payload = packet.payload.replace(self.asset_addr, self.honeypot_addr)
@@ -106,6 +89,9 @@ class Router(object):
         self.w.send(packet)
 
     def router_mainloop(self):
+        '''
+        The mainloop of the Router
+        '''
         packet = self.w.recv()  # Read a single packet
         # If the packet came from the honeypot
         if self.from_honeypot(packet):
@@ -116,6 +102,11 @@ class Router(object):
             self.handle_packet_from_outside(packet)
 
     def is_malicious(self, packet):
+        """
+        Checks if a packet is malicious
+        :param packet:
+        :return:
+        """
         # for SQLI
         pattern = re.compile(r"&email=(?P<email>.*)&password=(?P<password>.*)&submit=Login")
         m = re.search(pattern, packet.payload)
