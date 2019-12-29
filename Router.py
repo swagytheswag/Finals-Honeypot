@@ -15,6 +15,7 @@ class Router(object):
         self.asset_addr = asset_addr
         self.honeypot_addr = honeypot_addr
         self.blacklist = []
+        self.incoming_addresses = []
         self.w = pydivert.WinDivert("(tcp.SrcPort == 5000 or tcp.DstPort == 5000) and ip.SrcAddr != %s"%(self.asset_addr))
 
         open('logger.log', 'w').close()
@@ -48,7 +49,7 @@ class Router(object):
         # rout the packet back to the original sender
         # self.send_packet_with_original_destination(packet)
         packet.ipv4.src_addr = self.asset_addr
-        packet.ipv4.dst_addr = '10.0.0.2'
+        packet.ipv4.dst_addr = self.incoming_addresses.pop(0)
         packet.direction = 0  # outbounding
         self.w.send(packet)
         self.logger.debug('Redirecting a packet from the Honeypot to the Hacker at %s' % (packet.ipv4.dst_addr))
@@ -62,19 +63,20 @@ class Router(object):
             self.w.send(packet)
         else:
             if packet.ipv4.src_addr in self.blacklist:
+                self.logger.debug('Redirecting a blacklisted packet to the Honeypot from %s' % (packet.ipv4.src_addr))
                 self.send_to_honeypot(packet)
-                self.logger.debug('Redirecting a blacklisted packet to the Honeypot from %s'%(packet.ipv4.src_addr))
 
             # if the packet includes malicious data
             elif self.is_malicious(packet):
+                self.logger.debug('Redirecting a malicious packet to the Honeypot from %s' % (packet.ipv4.src_addr))
                 self.blacklist.append(packet.ipv4.src_addr)
+                self.create_tcp_session_with_honeypot
                 self.send_to_honeypot(packet)
-                self.logger.debug('Redirecting a malicious packet to the Honeypot from %s'%(packet.ipv4.src_addr))
 
             # if the packet is safe, let it go
             else:
+                self.logger.debug('Let in a non-malicious, non-blacklisted packet from %s' % (packet.ipv4.src_addr))
                 self.w.send(packet)
-                self.logger.debug('Let in a non-malicious, non-blacklisted packet from %s'%(packet.ipv4.src_addr))
 
     def send_to_honeypot(self, packet):
         """
@@ -82,9 +84,9 @@ class Router(object):
         :param packet:
         :return:
         """
+        self.incoming_addresses.append(packet.ipv4.src_addr) # save the incoming address
         packet.ipv4.src_addr = self.asset_addr
         packet.ipv4.dst_addr = self.honeypot_addr
-        #packet.payload = packet.payload.replace(self.asset_addr, self.honeypot_addr)
         packet.direction = 0  # outbounding
         self.w.send(packet)
 
