@@ -4,6 +4,8 @@ from flask_bcrypt import Bcrypt
 from flask_login import LoginManager
 
 app = Flask(__name__)
+app.config['WTF_CSRF_METHODS'] = []  # Disable CSRF methods
+app.config['WTF_CSRF_ENABLED'] = False  # Disable CSRF methods
 app.config['SECRET_KEY'] = 'secret'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site.db'
 db = SQLAlchemy(app)
