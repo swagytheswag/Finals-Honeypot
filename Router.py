@@ -49,7 +49,7 @@ class Router(object):
         # rout the packet back to the original sender
         # self.send_packet_with_original_destination(packet)
         packet.ipv4.src_addr = self.asset_addr
-        packet.ipv4.dst_addr = self.incoming_addresses.pop(0)
+        packet.ipv4.dst_addr = '10.0.0.2'#self.incoming_addresses.pop(0)
         packet.direction = 0  # outbounding
         self.w.send(packet)
         self.logger.debug('Redirecting a packet from the Honeypot to the Hacker at %s' % (packet.ipv4.dst_addr))
@@ -63,15 +63,16 @@ class Router(object):
             self.w.send(packet)
         else:
             if packet.ipv4.src_addr in self.blacklist:
-                self.logger.debug('Redirecting a blacklisted packet to the Honeypot from %s' % (packet.ipv4.src_addr))
-                self.send_to_honeypot(packet)
+                pass
+                #self.logger.debug('Redirecting a blacklisted packet to the Honeypot from %s' % (packet.ipv4.src_addr))
+                #self.send_to_honeypot(packet)
 
             # if the packet includes malicious data
             elif self.is_malicious(packet):
                 self.logger.debug('Redirecting a malicious packet to the Honeypot from %s' % (packet.ipv4.src_addr))
                 self.blacklist.append(packet.ipv4.src_addr)
-                self.create_tcp_session_with_honeypot
-                self.send_to_honeypot(packet)
+                self.start_tcp_session_with_honeypot(packet)
+                #self.send_to_honeypot(packet)
 
             # if the packet is safe, let it go
             else:
@@ -110,7 +111,7 @@ class Router(object):
         :return:
         """
         # for SQLI
-        pattern = re.compile(r"&email=(?P<email>.*)&password=(?P<password>.*)&submit=Login")
+        pattern = re.compile(r"email=(?P<email>.*)&password=(?P<password>.*)&submit=Login")
         m = re.search(pattern, packet.payload)
 
         if packet.payload[0:4] == 'POST' and m:
@@ -120,6 +121,40 @@ class Router(object):
                     self.logger.warning('SQLInjection attempt caught from %s'%(packet.ipv4.src_addr))
                     return True
         return False
+
+    def start_tcp_session_with_honeypot(self, packet):
+        synack = scapy.sr1(scapy.IP(src=self.asset_addr, dst=self.honeypot_addr) \
+                   / scapy.TCP(sport=packet.src_port, dport=packet.dst_port, flags='S', \
+                               seq=packet.tcp.seq_num-1, ack=packet.tcp.ack_num))
+
+        scapy.send(scapy.IP(src=self.asset_addr, dst=self.honeypot_addr) \
+                   / scapy.TCP(sport=packet.src_port, dport=packet.dst_port, flags='A', \
+                               seq=packet.tcp.seq_num, ack=synack[scapy.TCP].seq+1))
+
+        packet.direction = 0  # outbounding
+        pkt = scapy.IP(packet.ipv4.raw.tobytes())
+        # Correct the IP/TCP fields
+        del pkt[scapy.IP].id
+        del pkt[scapy.IP].chksum
+        pkt[scapy.IP].src = self.asset_addr
+        pkt[scapy.IP].dst = self.honeypot_addr
+        pkt[scapy.TCP].seq = synack[scapy.TCP].ack
+        pkt[scapy.TCP].ack = synack[scapy.TCP].seq + 1
+
+        # Change the payload to fit the Honeypot's IP
+        payload_before = len(pkt[scapy.TCP].payload)
+        pkt[scapy.TCP].payload = scapy.Raw(str(pkt[scapy.TCP].payload).replace(self.asset_addr, self.honeypot_addr))
+        payload_after = len(pkt[scapy.TCP].payload)
+        payload_dif = payload_after - payload_before
+        pkt[scapy.IP].len = pkt[scapy.IP].len + payload_dif
+
+        # calculate the correct TCP fields
+        del pkt[scapy.TCP].chksum
+        del pkt[scapy.TCP].window
+        pkt[scapy.TCP] = pkt[scapy.TCP].__class__(str(pkt[scapy.TCP]))
+
+        scapy.send(pkt)
+
 
 
 
