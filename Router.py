@@ -60,7 +60,7 @@ class Router(object):
         if packet.ipv4.src_addr == self.asset_addr:
             self.w.send(packet)
         else:
-            self.session_manager.update_incoming_sessions(packet)
+            self.session_manager.update_asset_sessions(packet)
             if self.session_manager.is_client_blacklisted(packet):
                 pass
                 #self.logger.debug('Redirecting a blacklisted packet to the Honeypot from %s' % (packet.ipv4.src_addr))
@@ -85,27 +85,16 @@ class Router(object):
         :return:
         """
         sess = self.session_manager.get_honeypot_session(packet)
-
         packet.direction = 0  # outbounding
         pkt = scapy.IP(packet.ipv4.raw.tobytes())
         # Correct the IP/TCP fields
-        if isinstance(sess, int):
-            del pkt[scapy.IP].id
-            pkt[scapy.IP].id = sess
-            print pkt[scapy.IP].id
-            del pkt[scapy.IP].chksum
-            pkt[scapy.IP].src = self.asset_addr
-            pkt[scapy.IP].dst = self.honeypot_addr
-            pkt[scapy.TCP].seq = packet.tcp.ack_num
-            pkt[scapy.TCP].ack = packet.tcp.seq_num + packet.tcp.header_len
-        else:
-            del pkt[scapy.IP].id
-            pkt[scapy.IP].id = sess.ipv4_id
-            del pkt[scapy.IP].chksum
-            pkt[scapy.IP].src = self.asset_addr
-            pkt[scapy.IP].dst = self.honeypot_addr
-            pkt[scapy.TCP].seq = sess.tcp_ack
-            pkt[scapy.TCP].ack = sess.tcp_seq + sess.tcp_header_len - 40
+        del pkt[scapy.IP].id
+        pkt[scapy.IP].id = sess.ipv4_id
+        del pkt[scapy.IP].chksum
+        pkt[scapy.IP].src = self.asset_addr
+        pkt[scapy.IP].dst = self.honeypot_addr
+        pkt[scapy.TCP].seq = sess.tcp_ack
+        pkt[scapy.TCP].ack = sess.tcp_seq + sess.tcp_header_len - 40
 
             # Change the payload to fit the Honeypot's IP
         payload_before = len(pkt[scapy.TCP].payload)
