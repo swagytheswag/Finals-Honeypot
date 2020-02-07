@@ -85,10 +85,11 @@ class Router(object):
         elif packet.tcp.ack and not packet.tcp.psh:
             pass
 
-        elif self.is_malicious(packet):
-            send_to_honeypot.append(packet)
-        else:
-            send_to_asset.append(packet)
+        elif packet.tcp.ack and packet.tcp.psh:
+            elif self.is_malicious(packet):
+                send_to_honeypot.append(packet)
+            else:
+                send_to_asset.append(packet)
 
 
 def get_packet_payload(packet):
@@ -111,28 +112,40 @@ def send_to_asset_handler(asset_addr):
             tcpClientSock.connect(ADDR)
             tcpClientSock.send(payload)
 
-            payloads_to_send = []
-            while '</html>' not in payloads_to_send[-1]:
-                payloads_to_send.append(tcpClientSock.recv(BUFFSIZ))
-
+            payload_to_send = ""
+            while True:
+                data = tcpClientSock.recv(BUFFSIZ)
+                if not data: break
+                payload_to_send += data
             tcpClientSock.close()
 
-            for payload_to_send in payloads_to_send:
-                scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
-                           / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='PA', \
-                                       seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + 1) \
-                           / scapy.Raw(payload_to_send))
+            ack_back = scapy.IP(packet.ipv4.raw.tobytes())
+            ack_back[scapy.TCP].seq = ack_back[scapy.TCP].seq + len(ack_back[scapy.TCP].payload)
 
-            scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
-                       / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='F', \
-                                   seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + 1))
+            scapy.send(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
+                       / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport, flags='A', \
+                                   seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq), \
+                       verbose=False)
+            n = int(len(payload_to_send)/5)
+            payloads_to_send = [payload_to_send[0:n], payload_to_send[n:2*n], payload_to_send[2*n:3*n], payload_to_send[3*n:4*n], payload_to_send[4*n:]]
+            for pay in payloads_to_send:
+                ack_back = scapy.sr1(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
+                               / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport, flags='PA', \
+                                           seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq) \
+                                / scapy.Raw(pay) \
+                                , verbose=False)
+
+            scapy.send(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
+                       / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport, flags='F', \
+                                   seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq) \
+                       , verbose=False)
 
 
 def send_to_honeypot_handler(honeypot_addr):
     global send_to_honeypot
     while True:
         if send_to_honeypot:
-            packet = send_to_asset.pop(0)
+            packet = send_to_honeypot.pop(0)
             payload = get_packet_payload(packet)
 
             HOST = honeypot_addr
@@ -143,17 +156,36 @@ def send_to_honeypot_handler(honeypot_addr):
             tcpClientSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             tcpClientSock.connect(ADDR)
             tcpClientSock.send(payload)
-            payload_to_send = tcpClientSock.recv(BUFFSIZ)
+
+            payload_to_send = ""
+            while True:
+                data = tcpClientSock.recv(BUFFSIZ)
+                if not data: break
+                payload_to_send += data
             tcpClientSock.close()
 
-            scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
-                       / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='PA', \
-                                   seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + 1) \
-                       / scapy.Raw(payload_to_send))
+            ack_back = scapy.IP(packet.ipv4.raw.tobytes())
+            ack_back[scapy.TCP].seq = ack_back[scapy.TCP].seq + len(ack_back[scapy.TCP].payload)
 
-            scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
-                       / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='F', \
-                                   seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + 1))
+            scapy.send(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
+                       / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport, flags='A', \
+                                   seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq), \
+                       verbose=False)
+            n = int(len(payload_to_send) / 5)
+            payloads_to_send = [payload_to_send[0:n], payload_to_send[n:2 * n], payload_to_send[2 * n:3 * n],
+                                payload_to_send[3 * n:4 * n], payload_to_send[4 * n:]]
+            for pay in payloads_to_send:
+                ack_back = scapy.sr1(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
+                                     / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport,
+                                                 flags='PA', \
+                                                 seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq) \
+                                     / scapy.Raw(pay) \
+                                     , verbose=False)
+
+            scapy.send(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
+                       / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport, flags='F', \
+                                   seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq) \
+                       , verbose=False)
 
 
 global send_to_asset
@@ -161,7 +193,7 @@ send_to_asset = []
 global send_to_honeypot
 send_to_honeypot = []
 
-router = Router("172.16.10.189", "172.16.10.179")    # Initialize the router object
+router = Router("10.0.0.7", "10.0.0.17")    # Initialize the router object
 router.start_router()  # Packets will be captured from now on
 while True:
     router.router_mainloop()
