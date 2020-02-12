@@ -83,13 +83,14 @@ class Router(object):
                        / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='SA', \
                                    seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + 1), \
                        verbose=False)
-        # if it's TCP ACK, it's alright ;)
-        elif packet.tcp.ack and not packet.tcp.psh:
-            pass
-
-        elif packet.tcp.ack and packet.tcp.psh:
+        # if packet ha payload over TCP, deal with it
+        elif packet.tcp.ack and self.get_packet_payload(packet):
             payload = self.get_packet_payload(packet)
             all_packets.append((packet, payload))
+        # if it's TCP ACK, it's alright ;)
+        else:
+            pass
+
 
     def get_packet_payload(self, packet):
         pkt = scapy.IP(packet.ipv4.raw.tobytes())
@@ -120,8 +121,9 @@ class Router(object):
                     m = re.search(pattern, payload)
 
                 if packet.ipv4.src_addr in self.blacklist or self.is_malicious(packet, payload):
-                    self.blacklist.append(packet.ipv4.src_addr)
-                    self.logger.info('%s is now blacklisted' % (packet.ipv4.src_addr))
+                    if packet.ipv4.src_addr not in packet.ipv4.src_addr:
+                        self.blacklist.append(packet.ipv4.src_addr)
+                        self.logger.info('%s is now blacklisted' % (packet.ipv4.src_addr))
                     send_to_honeypot.append((packet, payload))
                 else:
                     send_to_asset.append((packet, payload))
