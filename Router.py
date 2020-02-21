@@ -71,8 +71,6 @@ class Router(object):
         '''
 
         global all_packets
-        global send_to_asset
-        global send_to_honeypot
 
         packet = self.w.recv()  # Read a single packet
 
@@ -91,7 +89,6 @@ class Router(object):
         else:
             pass
 
-
     def get_packet_payload(self, packet):
         pkt = scapy.IP(packet.ipv4.raw.tobytes())
         return str(pkt[scapy.TCP].payload)
@@ -102,6 +99,8 @@ class Router(object):
         :return:
         '''
         global all_packets
+        global send_to_asset
+        global send_to_honeypot
         while True:
             if all_packets: # if there's a packet to read
                 packet, payload = all_packets.pop(0)
