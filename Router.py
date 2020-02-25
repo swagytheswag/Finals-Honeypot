@@ -3,7 +3,6 @@ import scapy.all as scapy
 import re
 import urllib
 import logging
-#from SessionManager import SessionManager, Client, Session
 import socket
 import threading
 
@@ -81,8 +80,13 @@ class Router(object):
                        / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='SA', \
                                    seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + 1), \
                        verbose=False)
+        elif packet.tcp.fin:
+            scapy.send(scapy.IP(src=self.asset_addr, dst=packet.ipv4.src_addr) \
+                       / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='FA', \
+                                   seq=packet.tcp.ack_num, ack=packet.tcp.seq_num), \
+                       verbose=False)
         # if packet ha payload over TCP, deal with it
-        elif packet.tcp.ack and self.get_packet_payload(packet):
+        elif packet.tcp.ack and len(self.get_packet_payload(packet)) > 1:
             payload = self.get_packet_payload(packet)
             all_packets.append((packet, payload))
         # if it's TCP ACK, it's alright ;)
@@ -120,7 +124,7 @@ class Router(object):
                     m = re.search(pattern, payload)
 
                 if packet.ipv4.src_addr in self.blacklist or self.is_malicious(packet, payload):
-                    if packet.ipv4.src_addr not in packet.ipv4.src_addr:
+                    if packet.ipv4.src_addr not in self.blacklist:
                         self.blacklist.append(packet.ipv4.src_addr)
                         self.logger.info('%s is now blacklisted' % (packet.ipv4.src_addr))
                     send_to_honeypot.append((packet, payload))
@@ -169,11 +173,6 @@ class Router(object):
                                     / scapy.Raw(pay), \
                                     verbose=False)
 
-                scapy.send(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
-                           / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport, flags='F', \
-                                       seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq), \
-                           verbose=False)
-
     def send_to_honeypot_handler(self, honeypot_addr):
         '''
         Goes through all the packets directed to the honeypot.
@@ -218,11 +217,6 @@ class Router(object):
                                          / scapy.Raw(pay), \
                                          verbose=False)
 
-                scapy.send(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
-                           / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport, flags='F', \
-                                       seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq), \
-                           verbose=False)
-
 global all_packets
 all_packets = []
 global send_to_asset
@@ -230,7 +224,7 @@ send_to_asset = []
 global send_to_honeypot
 send_to_honeypot = []
 
-router = Router("10.0.0.7", "10.0.0.17")    # Initialize the router object
+router = Router("172.16.10.162", "172.16.13.210")    # Initialize the router object
 router.start_router()  # Packets will be captured from now on
 while True:
     router.router_mainloop()
