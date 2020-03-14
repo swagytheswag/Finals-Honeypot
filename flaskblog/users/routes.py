@@ -65,10 +65,11 @@ def account():
     return render_template('account.html', title='Account',
                            image_file=image_file, form=form)
 
-@users.route("/user/<string:username>")
-def user_posts(username):
+@users.route("/passwords")
+@login_required
+def user_posts():
     page = request.args.get('page', 1, type=int)
-    user = User.query.filter_by(username=username).first_or_404()
+    user = current_user
     posts = Post.query.filter_by(author=user)\
         .order_by(Post.date_posted.desc())\
         .paginate(page=page, per_page=5)
