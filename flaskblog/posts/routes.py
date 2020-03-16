@@ -15,10 +15,10 @@ def new_post():
         post = Post(title=form.title.data, content=form.content.data, author=current_user)
         db.session.add(post)
         db.session.commit()
-        flash('Your post has been created!', 'success')
-        return redirect(url_for('main.home'))
-    return render_template('create_post.html', title='New Post',
-                           form=form, legend='New Post')
+        flash('Your password has been created!', 'success')
+        return redirect(url_for('users.user_posts'))
+    return render_template('create_post.html', title='New Password',
+                           form=form, legend='New Password')
 
 
 @posts.route("/post/<int:post_id>")
@@ -43,8 +43,8 @@ def update_post(post_id):
     elif request.method == 'GET':
         form.title.data = post.title
         form.content.data = post.content
-    return render_template('create_post.html', title='Update Post',
-                           form=form, legend='Update Post')
+    return render_template('create_post.html', title='Update Password',
+                           form=form, legend='Update Password')
 
 
 @posts.route("/post/<int:post_id>/delete", methods=['POST'])
@@ -55,5 +55,5 @@ def delete_post(post_id):
         abort(403)
     db.session.delete(post)
     db.session.commit()
-    flash('Your post has been deleted!', 'success')
-    return redirect(url_for('main.home'))
+    flash('The password has been deleted!', 'success')
+    return redirect(url_for('users.user_posts'))
