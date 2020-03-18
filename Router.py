@@ -5,6 +5,7 @@ import urllib
 import logging
 import socket
 import threading
+import time
 
 
 class Router(object):
@@ -17,6 +18,7 @@ class Router(object):
         self.asset_addr = asset_addr
         self.honeypot_addr = honeypot_addr
         self.blacklist = []
+        self.syn_counter = 0
         self.w = pydivert.WinDivert("(tcp.SrcPort == 50000 or tcp.DstPort == 50000) and ip.SrcAddr != %s and ip.SrcAddr != %s"%(self.asset_addr, self.honeypot_addr))
 
         open('logger.log', 'w').close()
@@ -75,6 +77,7 @@ class Router(object):
 
         # if it's TCP SYN, Send back SYN-ACK (to the same port)
         if packet.tcp.syn:
+            self.syn_counter += 1
             # using scapy
             scapy.send(scapy.IP(src=self.asset_addr, dst=packet.ipv4.src_addr) \
                        / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='SA', \
@@ -91,7 +94,14 @@ class Router(object):
             all_packets.append((packet, payload))
         # if it's TCP ACK, it's alright ;)
         else:
+            self.syn_counter -= 1
             pass
+
+        # syn flood:
+        if self.syn_counter >= 5:
+            self.syn_counter = 0
+            self.logger.warning('SYN Flood - DOS caught. Router paused for 60 seconds')
+            time.sleep(10)
 
     def get_packet_payload(self, packet):
         pkt = scapy.IP(packet.ipv4.raw.tobytes())
@@ -224,7 +234,7 @@ send_to_asset = []
 global send_to_honeypot
 send_to_honeypot = []
 
-router = Router("172.16.10.162", "172.16.13.210")    # Initialize the router object
+router = Router("10.0.0.8", "10.0.0.17")    # Initialize the router object
 router.start_router()  # Packets will be captured from now on
 while True:
     router.router_mainloop()
