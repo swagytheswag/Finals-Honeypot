@@ -6,6 +6,7 @@ import logging
 import socket
 import threading
 import time
+from logGui import *
 
 
 class Router(object):
@@ -21,23 +22,43 @@ class Router(object):
         self.syn_counter = 0
         self.w = pydivert.WinDivert("(tcp.SrcPort == 50000 or tcp.DstPort == 50000) and ip.SrcAddr != %s and ip.SrcAddr != %s"%(self.asset_addr, self.honeypot_addr))
 
+        self.all_packets = []
+        self.send_to_asset = []
+        self.send_to_honeypot = []
+
+
+        # GUI
+        self.root = tk.Tk()
+        self.my_gui = myGUI(self.root)
+
         open('logger.log', 'w').close()
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
-        self.formatter = logging.Formatter('%(asctime)s:%(levelname)s:%(name)s:%(message)s')
+        self.formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
 
+        # logger.log File
         self.file_handler = logging.FileHandler('logger.log')
         self.file_handler.setLevel(logging.INFO)
         self.file_handler.setFormatter(self.formatter)
 
+        # in console
         self.stream_handler = logging.StreamHandler()
         self.stream_handler.setLevel(logging.DEBUG)
         self.stream_handler.setFormatter(self.formatter)
 
+        # for the Tkinter GUI
+        self.text_handler = self.my_gui.text_handler
+        self.text_handler.setLevel(logging.INFO)
+        self.text_handler.setFormatter(self.formatter)
+
         self.logger.addHandler(self.file_handler)
         self.logger.addHandler(self.stream_handler)
+        self.logger.addHandler(self.text_handler)
 
     def start_router(self):
+        # for the Tkinter GUI
+        threading.Thread(target=self.my_gui.gui_worker).start()
+
         self.logger.info('Starting The Router')
         threading.Thread(target=self.all_packets_handler, args=()).start()
         threading.Thread(target=self.send_to_asset_handler, args=(self.asset_addr,)).start()
@@ -71,8 +92,6 @@ class Router(object):
         The mainloop of the Router
         '''
 
-        global all_packets
-
         packet = self.w.recv()  # Read a single packet
 
         # if it's TCP SYN, Send back SYN-ACK (to the same port)
@@ -91,16 +110,17 @@ class Router(object):
         # if packet ha payload over TCP, deal with it
         elif packet.tcp.ack and len(self.get_packet_payload(packet)) > 1:
             payload = self.get_packet_payload(packet)
-            all_packets.append((packet, payload))
+            self.all_packets.append((packet, payload))
         # if it's TCP ACK, it's alright ;)
         else:
-            self.syn_counter -= 1
+            if self.syn_counter > 0:
+                self.syn_counter -= 1
             pass
 
         # syn flood:
         if self.syn_counter >= 5:
             self.syn_counter = 0
-            self.logger.warning('SYN Flood - DOS caught. Router paused for 60 seconds')
+            self.logger.warning('SYN Flood - DOS caught. Router paused for 10 seconds')
             time.sleep(10)
 
     def get_packet_payload(self, packet):
@@ -112,12 +132,9 @@ class Router(object):
         Goes through all the incoming packets and decides what to do with them.
         :return:
         '''
-        global all_packets
-        global send_to_asset
-        global send_to_honeypot
         while True:
-            if all_packets: # if there's a packet to read
-                packet, payload = all_packets.pop(0)
+            if self.all_packets: # if there's a packet to read
+                packet, payload = self.all_packets.pop(0)
                 # check if the full payload has arrived
                 pattern = re.compile(r"Content-Length: (?P<content_length>\d*)")
                 m = re.search(pattern, payload)
@@ -128,8 +145,8 @@ class Router(object):
                 # if not, search for the full payload in the next packets
                 while not m or int(len(m.group('content').encode('utf-8'))) != int(content_length):
                     while True:
-                        if all_packets: break
-                    packet, xpayload = all_packets.pop(0)
+                        if self.all_packets: break
+                    packet, xpayload = self.all_packets.pop(0)
                     payload += xpayload
                     m = re.search(pattern, payload)
 
@@ -137,19 +154,18 @@ class Router(object):
                     if packet.ipv4.src_addr not in self.blacklist:
                         self.blacklist.append(packet.ipv4.src_addr)
                         self.logger.info('%s is now blacklisted' % (packet.ipv4.src_addr))
-                    send_to_honeypot.append((packet, payload))
+                    self.send_to_honeypot.append((packet, payload))
                 else:
-                    send_to_asset.append((packet, payload))
+                    self.send_to_asset.append((packet, payload))
 
     def send_to_asset_handler(self, asset_addr):
         '''
         Goes through all the packets directed to the asset.
         Talks with the asset and redirects the answer to the original sender.
         '''
-        global send_to_asset
         while True:
-            if send_to_asset: # if there's a packet to read
-                packet, payload = send_to_asset.pop(0)
+            if self.send_to_asset: # if there's a packet to read
+                packet, payload = self.send_to_asset.pop(0)
 
                 HOST = asset_addr
                 PORT = 55555
@@ -188,10 +204,9 @@ class Router(object):
         Goes through all the packets directed to the honeypot.
         Talks with the honeypot and redirects the answer to the original sender.
         '''
-        global send_to_honeypot
         while True:
-            if send_to_honeypot: # if there's a packet to read
-                packet, payload = send_to_honeypot.pop(0)
+            if self.send_to_honeypot: # if there's a packet to read
+                packet, payload = self.send_to_honeypot.pop(0)
 
                 HOST = honeypot_addr
                 PORT = 55555
@@ -227,16 +242,10 @@ class Router(object):
                                          / scapy.Raw(pay), \
                                          verbose=False)
 
-global all_packets
-all_packets = []
-global send_to_asset
-send_to_asset = []
-global send_to_honeypot
-send_to_honeypot = []
 
-router = Router("10.0.0.8", "10.0.0.17")    # Initialize the router object
+router = Router("10.0.0.8", "10.0.0.9")    # Initialize the router object
 router.start_router()  # Packets will be captured from now on
 while True:
     router.router_mainloop()
 
-router.stop_router()    # stop capturing packets
+router.stop_router()    # stop capturing packetsrouter.stop_router()    # stop capturing packetss
