@@ -6,6 +6,7 @@ import logging
 import socket
 import threading
 import time
+import getmac
 from logGui import *
 
 
@@ -84,8 +85,49 @@ class Router(object):
             for cred in credentials:
                 if '"' in cred or "'" in cred:
                     self.logger.warning('SQLInjection attempt caught from %s' % (packet.ipv4.src_addr))
+                    threading.Thread(target=self.fingerprinting, args=(packet,)).start()
                     return True
         return False
+
+    def fingerprinting(self, packet):
+        """
+        Checks for the OS and device of the packet source, and logs the information.
+        Analysis based on window size, ttl and MAC
+        :param pydivert packet:
+        :return:
+        """
+        ttl = packet.ipv4.ttl
+        win_siz = packet.tcp.window_size
+        os = ""
+        if ttl == 64 and win_siz == 5840:
+            os = "Linux (kernel 2.4 and 2.6)"
+        elif ttl == 64 and win_siz == 5720:
+            os = "Google's customized Linux"
+        elif ttl == 64 and win_siz == 65535:
+            os = "FreeBSD"
+        elif ttl == 128 and win_siz == 65535:
+            os = "Windows XP"
+        elif ttl == 128 and win_siz == 65535:
+            os = "Windows 7, Vista and Server 2008"
+        elif ttl == 255 and win_siz == 4128:
+            os = "Cisco Router (IOS 12.4)"
+        else:
+            os = "Unknown"
+        self.logger.info("The OS of the machine at %s is probably: %s" % (packet.ipv4.src_addr, os))
+
+        mac = getmac.get_mac_address(ip=packet.ipv4.src_addr)
+        print mac
+        man = ''
+        if "7c:67:a2" in mac:
+            man = "IntelCor"
+        elif "f4:09:d8" in mac:
+            man = "SamsungE"
+        elif "a8:9c:ed" in mac:
+            man = "XiaomiCo"
+        else:
+            man = "Unknown"
+        self.logger.info("NIC of the machine at %s is manufacturer by: %s" % (packet.ipv4.src_addr, man))
+
 
     def router_mainloop(self):
         '''
@@ -124,6 +166,10 @@ class Router(object):
             time.sleep(10)
 
     def get_packet_payload(self, packet):
+        """
+        :param pydivert packet:
+        :return the TCP payload:
+        """
         pkt = scapy.IP(packet.ipv4.raw.tobytes())
         return str(pkt[scapy.TCP].payload)
 
