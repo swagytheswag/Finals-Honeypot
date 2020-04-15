@@ -115,20 +115,6 @@ class Router(object):
             os = "Unknown"
         self.logger.info("The OS of the machine at %s is probably: %s" % (packet.ipv4.src_addr, os))
 
-        mac = getmac.get_mac_address(ip=packet.ipv4.src_addr)
-        print mac
-        man = ''
-        if "7c:67:a2" in mac:
-            man = "IntelCor"
-        elif "f4:09:d8" in mac:
-            man = "SamsungE"
-        elif "a8:9c:ed" in mac:
-            man = "XiaomiCo"
-        else:
-            man = "Unknown"
-        self.logger.info("NIC of the machine at %s is manufacturer by: %s" % (packet.ipv4.src_addr, man))
-
-
     def router_mainloop(self):
         '''
         The mainloop of the Router
