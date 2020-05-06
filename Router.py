@@ -6,7 +6,6 @@ import logging
 import socket
 import threading
 import time
-import getmac
 from logGui import *
 
 
@@ -19,14 +18,18 @@ class Router(object):
         """
         self.asset_addr = asset_addr
         self.honeypot_addr = honeypot_addr
-        self.blacklist = []
         self.syn_counter = 0
         self.w = pydivert.WinDivert("(tcp.SrcPort == 50000 or tcp.DstPort == 50000) and ip.SrcAddr != %s and ip.SrcAddr != %s"%(self.asset_addr, self.honeypot_addr))
+
+        self.blacklist = []
+        # Update initial blacklist from a file
+        with open("blacklist.txt", 'rb') as black_file:
+            for line in black_file:
+                self.blacklist.append(line)
 
         self.all_packets = []
         self.send_to_asset = []
         self.send_to_honeypot = []
-
 
         # GUI
         self.root = tk.Tk()
@@ -69,6 +72,16 @@ class Router(object):
     def stop_router(self):
         self.logger.info('Stopping The Router')
         self.w.close()  # stop capturing packets
+
+    def add_to_blacklist(self, ip_addr):
+        """
+        add the given ip to the blacklist
+        :param ip_addr:
+        :return:
+        """
+        self.blacklist.append(ip_addr)
+        with open("blacklist.txt", 'ab') as black_file:
+            black_file.write("\n" + ip_addr)
 
     def is_malicious(self, packet, payload):
         """
@@ -148,8 +161,8 @@ class Router(object):
         # syn flood:
         if self.syn_counter >= 5:
             self.syn_counter = 0
-            self.logger.warning('SYN Flood - DOS caught. Router paused for 10 seconds')
-            time.sleep(10)
+            self.logger.warning('SYN Flood - DOS caught. Router paused for 60 seconds')
+            time.sleep(60)
 
     def get_packet_payload(self, packet):
         """
@@ -184,7 +197,7 @@ class Router(object):
 
                 if packet.ipv4.src_addr in self.blacklist or self.is_malicious(packet, payload):
                     if packet.ipv4.src_addr not in self.blacklist:
-                        self.blacklist.append(packet.ipv4.src_addr)
+                        self.add_to_blacklist(packet.ipv4.src_addr)
                         self.logger.info('%s is now blacklisted' % (packet.ipv4.src_addr))
                     self.send_to_honeypot.append((packet, payload))
                 else:

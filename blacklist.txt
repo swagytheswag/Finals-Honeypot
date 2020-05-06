@@ -1,0 +1,2 @@
+# list here banned IP adresses (change when router is down):
+# xxx.xxx.xxx.xxx
