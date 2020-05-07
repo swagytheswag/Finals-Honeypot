@@ -1,0 +1,3 @@
+# list here allowed commands (change when router is down):
+# ipconfig
+hostname

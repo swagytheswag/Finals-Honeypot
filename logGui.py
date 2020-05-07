@@ -2,7 +2,6 @@ import time
 import logging
 import Tkinter as tk
 import ScrolledText
-import re
 
 
 class TextHandler(logging.Handler):
@@ -63,6 +62,7 @@ class myGUI(tk.Frame):
         self.text_handler = TextHandler(st)
 
     def gui_worker(self):
-        self.root.mainloop()
-        time.sleep(2)
+        while True:
+            self.root.mainloop()
+            time.sleep(2)
 
