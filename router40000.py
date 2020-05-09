@@ -25,7 +25,7 @@ class Router40000(BaseWrapper):
         # get all allowed commands from the file
         with open("allowed_commands.txt", 'rb') as commands_file:
             for line in commands_file:
-                self.allowed_commands.append(line)
+                self.allowed_commands.append(line.replace("\n", ""))
 
         self.active_clients = []
 
@@ -36,11 +36,18 @@ class Router40000(BaseWrapper):
         self.logger.info('Starting The Telnet Router')
         self.w.open()   # Packets will be captured from now on
 
-        threading.Thread(target=self.router_mainloop, args=()).start() # start the mainloop action
+        threading.Thread(target=self.router_mainloop, args=()).start()  # start the mainloop action
+        threading.Thread(target=self.catch_unwanted_resets, args=()).start()  # catch unwanted resets made by the kernel
 
     def stop_router(self):
         self.logger.info('Stopping The Telnet Router')
         self.w.close()  # stop capturing packets
+
+    def catch_unwanted_resets(self):
+        z = pydivert.WinDivert("tcp.SrcPort == 40000 and tcp.Rst and ip.SrcAddr == %s" % (self.asset_addr))
+        z.open()
+        while True:
+            z.recv()
 
     def is_malicious(self, packet, payload):
         """
@@ -48,8 +55,8 @@ class Router40000(BaseWrapper):
         :param payload:
         :return:
         """
-        if payload.startswith('execute'):
-            if payload.replace('\r\n', '')[8::] not in self.allowed_commands:
+        if payload.startswith('execute '):
+            if payload.replace('execute ', '') not in self.allowed_commands:
                 self.logger.warning('Disallowed command execution attempted by %s' % (packet.ipv4.src_addr))
                 threading.Thread(target=self.fingerprinting, args=(packet,)).start()
                 return True
@@ -108,17 +115,13 @@ class Router40000(BaseWrapper):
             ack_back[scapy.TCP].seq = ack_back[scapy.TCP].seq + len(ack_back[scapy.TCP].payload)
             prompt = tcpClientSock.recv(BUFFSIZ)
             symbol = tcpClientSock.recv(BUFFSIZ)
-            z = pydivert.WinDivert("tcp.SrcPort == 40000 and ip.SrcAddr == %s" % (self.asset_addr))
-            z.open()
-            data = prompt + symbol
-            ack_back = scapy.sr1(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
-                                 / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport,
-                                             flags='PA', \
-                                             seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq) \
-                                 / scapy.Raw(data), \
-                                 verbose=False)
-            z.recv()
-            z.close()
+            for data in (prompt, symbol):
+                ack_back = scapy.sr1(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
+                                     / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport,
+                                                 flags='PA', \
+                                                 seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq) \
+                                     / scapy.Raw(data), \
+                                     verbose=False)
 
             # capture data from client and send to the asset
             z = pydivert.WinDivert("tcp.DstPort == 40000 and ip.SrcAddr == %s" % (packet.ipv4.src_addr))
@@ -126,17 +129,9 @@ class Router40000(BaseWrapper):
             while True:
                 packet = z.recv()  # get packet from client
                 payload = self.get_packet_payload(packet)  # get character from packet
-                # send acknowledgment to the client
-                scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
-                           / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
-                                       flags='A', \
-                                       seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
-                           / scapy.Raw(""), \
-                           verbose=False)
-
 
                 if payload == '\b':  # if client backspaced
-                    overall = overall[::-1]  # delete the last character of the gathered command
+                    overall = overall[:-1]  # delete the last character of the gathered command
                     tcpClientSock.send(payload)  # send the character to the asset
                     data = tcpClientSock.recv(
                         BUFFSIZ)  # recieve the prompt change from the asset, and send to the client
@@ -147,6 +142,8 @@ class Router40000(BaseWrapper):
                                          / scapy.Raw(data), \
                                          verbose=False)
                 elif payload == '\r\n':  # client pressed Enter - the command is executed and an answer is incoming
+                    if self.is_malicious(packet, overall):
+                        raise Blacklisted
                     if overall == 'quit':
                         raise Disconnected
                     overall = ""  # re-gather the next command
@@ -155,31 +152,62 @@ class Router40000(BaseWrapper):
                     data2 = tcpClientSock.recv(BUFFSIZ)  # gather '/>'
                     data = data1 + data2
                     # send to the client
-                    ack_back = scapy.sr1(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
-                                         / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
-                                                     flags='PA', \
-                                                     seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
-                                         / scapy.Raw(data), \
-                                         verbose=False)
+                    if len(data) > 100:
+                        n = int(len(data) / 2)
+                        payloads_to_send = [data[0:n], data[n:]]
+                        scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                     / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                                 flags='A', \
+                                                 seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
+                                     / scapy.Raw(payloads_to_send[0]), \
+                                     verbose=False)
+                        ack_back = scapy.sr1(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                             / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                                         flags='PA', \
+                                                         seq=packet.tcp.ack_num+len(payloads_to_send[0]), ack=packet.tcp.seq_num + len(payload)) \
+                                             / scapy.Raw(payloads_to_send[1]), \
+                                             verbose=False)
+                    else:
+                        ack_back = scapy.sr1(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                             / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                                         flags='PA', \
+                                                         seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
+                                             / scapy.Raw(data), \
+                                             verbose=False)
                 else:
-                    overall += payload  # append data to the full command
+                    if payload:
+                        # send acknowledgment to the client
+                        scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                   / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                               flags='A', \
+                                               seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
+                                   / scapy.Raw(""), \
+                                   verbose=False)
+                        overall += payload  # append data to the full command
                     tcpClientSock.send(payload)  # send the character to the asset
         except Disconnected:
             # end connection
             ack_back = scapy.sr1(scapy.IP(src=self.asset_addr, dst=packet.ipv4.src_addr) \
-                                 / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='F', \
+                                 / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='FA', \
                                              seq=packet.tcp.ack_num, ack=packet.tcp.seq_num), \
                                  verbose=False)
+            packet = z.recv()
             packet = z.recv()
             scapy.send(scapy.IP(src=self.asset_addr, dst=packet.ipv4.src_addr) \
                        / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='A', \
                                    seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + 1), \
                        verbose=False)
             self.active_clients.remove(packet.ipv4.src_addr)
+        except Blacklisted:
+            # add IP to blacklist
+            self.add_to_blacklist(packet.ipv4.src_addr)
+            self.logger.info('%s is now blacklisted' % (packet.ipv4.src_addr))
+            # kill this thread, and start a new one to connect with the honeypot
+            threading.Thread(target=self.convert_client_to_honeypot, args=(packet,overall)).start()
         finally:
             z.close()
 
-    def handle_client_with_honeypot(self, packet, cmd_to_start_with=""):
+    def handle_client_with_honeypot(self, packet):
         self.active_clients.append(
             packet.ipv4.src_addr)  # don't pick anymore of this client's packet, let this thread handle it
         overall = ""  # gather the full command
@@ -196,17 +224,13 @@ class Router40000(BaseWrapper):
             ack_back[scapy.TCP].seq = ack_back[scapy.TCP].seq + len(ack_back[scapy.TCP].payload)
             prompt = tcpClientSock.recv(BUFFSIZ)
             symbol = tcpClientSock.recv(BUFFSIZ)
-            z = pydivert.WinDivert("tcp.SrcPort == 40000 and ip.SrcAddr == %s" % (self.asset_addr))
-            z.open()
-            data = prompt + symbol
-            ack_back = scapy.sr1(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
-                                 / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport,
-                                             flags='PA', \
-                                             seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq) \
-                                 / scapy.Raw(data), \
-                                 verbose=False)
-            z.recv()
-            z.close()
+            for data in (prompt, symbol):
+                ack_back = scapy.sr1(scapy.IP(src=ack_back[scapy.IP].dst, dst=ack_back[scapy.IP].src) \
+                                     / scapy.TCP(sport=ack_back[scapy.TCP].dport, dport=ack_back[scapy.TCP].sport,
+                                                 flags='PA', \
+                                                 seq=ack_back[scapy.TCP].ack, ack=ack_back[scapy.TCP].seq) \
+                                     / scapy.Raw(data), \
+                                     verbose=False)
 
             # capture data from client and send to the asset
             z = pydivert.WinDivert("tcp.DstPort == 40000 and ip.SrcAddr == %s" % (packet.ipv4.src_addr))
@@ -214,16 +238,9 @@ class Router40000(BaseWrapper):
             while True:
                 packet = z.recv()  # get packet from client
                 payload = self.get_packet_payload(packet)  # get character from packet
-                # send acknowledgment to the client
-                scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
-                           / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
-                                       flags='A', \
-                                       seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
-                           / scapy.Raw(""), \
-                           verbose=False)
 
                 if payload == '\b':  # if client backspaced
-                    overall = overall[::-1]  # delete the last character of the gathered command
+                    overall = overall[:-1]  # delete the last character of the gathered command
                     tcpClientSock.send(payload)  # send the character to the asset
                     data = tcpClientSock.recv(
                         BUFFSIZ)  # recieve the prompt change from the asset, and send to the client
@@ -242,21 +259,171 @@ class Router40000(BaseWrapper):
                     data2 = tcpClientSock.recv(BUFFSIZ)  # gather '/>'
                     data = data1 + data2
                     # send to the client
+                    if len(data) > 100:
+                        n = int(len(data) / 2)
+                        payloads_to_send = [data[0:n], data[n:]]
+                        scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                   / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                               flags='A', \
+                                               seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
+                                   / scapy.Raw(payloads_to_send[0]), \
+                                   verbose=False)
+                        ack_back = scapy.sr1(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                             / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                                         flags='PA', \
+                                                         seq=packet.tcp.ack_num + len(payloads_to_send[0]),
+                                                         ack=packet.tcp.seq_num + len(payload)) \
+                                             / scapy.Raw(payloads_to_send[1]), \
+                                             verbose=False)
+                    else:
+                        ack_back = scapy.sr1(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                             / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                                         flags='PA', \
+                                                         seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
+                                             / scapy.Raw(data), \
+                                             verbose=False)
+                else:
+                    if payload:
+                        # send acknowledgment to the client
+                        scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                   / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                               flags='A', \
+                                               seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
+                                   / scapy.Raw(""), \
+                                   verbose=False)
+                        overall += payload  # append data to the full command
+                    tcpClientSock.send(payload)  # send the character to the asset
+        except Disconnected:
+            # end connection
+            ack_back = scapy.sr1(scapy.IP(src=self.asset_addr, dst=packet.ipv4.src_addr) \
+                                 / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='FA', \
+                                             seq=packet.tcp.ack_num, ack=packet.tcp.seq_num), \
+                                 verbose=False)
+            packet = z.recv()
+            packet = z.recv()
+            scapy.send(scapy.IP(src=self.asset_addr, dst=packet.ipv4.src_addr) \
+                       / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='A', \
+                                   seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + 1), \
+                       verbose=False)
+            self.active_clients.remove(packet.ipv4.src_addr)
+        finally:
+            z.close()
+
+    def convert_client_to_honeypot(self, packet, cmd_to_start_with):
+        overall = cmd_to_start_with  # start with executing this command
+        # connect to the honeypot
+        HOST = self.honeypot_addr
+        PORT = 44444
+        BUFFSIZ = 4096
+        ADDR = (HOST, PORT)
+        tcpClientSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        tcpClientSock.connect(ADDR)
+        try:
+            # get the first prompt of the session, no need to send it to client
+            payload = self.get_packet_payload(packet)
+            prompt = tcpClientSock.recv(BUFFSIZ)
+            symbol = tcpClientSock.recv(BUFFSIZ)
+
+            # send the command to start with to the honeypot:
+            tcpClientSock.send(overall+'\r\n')  # send the character to the asset
+            data1 = tcpClientSock.recv(BUFFSIZ)  # gather answer
+            data2 = tcpClientSock.recv(BUFFSIZ)  # gather '/>'
+            data = data1 + data2
+            # send to the client
+            # send to the client
+            if len(data) > 100:
+                n = int(len(data) / 2)
+                payloads_to_send = [data[0:n], data[n:]]
+                scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                           / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                       flags='A', \
+                                       seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
+                           / scapy.Raw(payloads_to_send[0]), \
+                           verbose=False)
+                ack_back = scapy.sr1(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                     / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                                 flags='PA', \
+                                                 seq=packet.tcp.ack_num + len(payloads_to_send[0]),
+                                                 ack=packet.tcp.seq_num + len(payload)) \
+                                     / scapy.Raw(payloads_to_send[1]), \
+                                     verbose=False)
+            else:
+                ack_back = scapy.sr1(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                     / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                                 flags='PA', \
+                                                 seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
+                                     / scapy.Raw(data), \
+                                     verbose=False)
+
+            overall = ""  # re-gather the next command
+            # capture data from client and send to the asset
+            z = pydivert.WinDivert("tcp.DstPort == 40000 and ip.SrcAddr == %s" % (packet.ipv4.src_addr))
+            z.open()
+            while True:
+                packet = z.recv()  # get packet from client
+                payload = self.get_packet_payload(packet)  # get character from packet
+
+                if payload == '\b':  # if client backspaced
+                    overall = overall[:-1]  # delete the last character of the gathered command
+                    tcpClientSock.send(payload)  # send the character to the asset
+                    data = tcpClientSock.recv(
+                        BUFFSIZ)  # recieve the prompt change from the asset, and send to the client
                     ack_back = scapy.sr1(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
                                          / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
                                                      flags='PA', \
                                                      seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
                                          / scapy.Raw(data), \
                                          verbose=False)
+                elif payload == '\r\n':  # client pressed Enter - the command is executed and an answer is incoming
+                    if overall == 'quit':
+                        raise Disconnected
+                    overall = ""  # re-gather the next command
+                    tcpClientSock.send(payload)  # send the character to the asset
+                    data1 = tcpClientSock.recv(BUFFSIZ)  # gather answer
+                    data2 = tcpClientSock.recv(BUFFSIZ)  # gather '/>'
+                    data = data1 + data2
+                    # send to the client
+                    if len(data) > 100:
+                        n = int(len(data) / 2)
+                        payloads_to_send = [data[0:n], data[n:]]
+                        scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                   / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                               flags='A', \
+                                               seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
+                                   / scapy.Raw(payloads_to_send[0]), \
+                                   verbose=False)
+                        ack_back = scapy.sr1(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                             / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                                         flags='PA', \
+                                                         seq=packet.tcp.ack_num + len(payloads_to_send[0]),
+                                                         ack=packet.tcp.seq_num + len(payload)) \
+                                             / scapy.Raw(payloads_to_send[1]), \
+                                             verbose=False)
+                    else:
+                        ack_back = scapy.sr1(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                             / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                                         flags='PA', \
+                                                         seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
+                                             / scapy.Raw(data), \
+                                             verbose=False)
                 else:
-                    overall += payload  # append data to the full command
+                    if payload:
+                        # send acknowledgment to the client
+                        scapy.send(scapy.IP(src=packet.ipv4.dst_addr, dst=packet.ipv4.src_addr) \
+                                   / scapy.TCP(sport=packet.tcp.dst_port, dport=packet.tcp.src_port,
+                                               flags='A', \
+                                               seq=packet.tcp.ack_num, ack=packet.tcp.seq_num + len(payload)) \
+                                   / scapy.Raw(""), \
+                                   verbose=False)
+                        overall += payload  # append data to the full command
                     tcpClientSock.send(payload)  # send the character to the asset
         except Disconnected:
             # end connection
             ack_back = scapy.sr1(scapy.IP(src=self.asset_addr, dst=packet.ipv4.src_addr) \
-                                 / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='F', \
+                                 / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='FA', \
                                              seq=packet.tcp.ack_num, ack=packet.tcp.seq_num), \
                                  verbose=False)
+            packet = z.recv()
             packet = z.recv()
             scapy.send(scapy.IP(src=self.asset_addr, dst=packet.ipv4.src_addr) \
                        / scapy.TCP(sport=packet.dst_port, dport=packet.src_port, flags='A', \

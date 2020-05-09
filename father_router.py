@@ -32,7 +32,7 @@ class FatherRouter(object):
         # Update initial blacklist from a file
         with open("blacklist.txt", 'rb') as black_file:
             for line in black_file:
-                self.blacklist.append(line)
+                self.blacklist.append(line.replace("\n", ""))
 
         # GUI
         self.root = tk.Tk()
